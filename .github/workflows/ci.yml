@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install package and dev tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint (ruff check)
+        run: python -m ruff check .
+
+      - name: Format check (ruff format)
+        run: python -m ruff format --check skala tests
+
+      - name: Type check (mypy)
+        run: python -m mypy skala tests
+
+      - name: Unit tests (pytest)
+        run: python -m pytest -o addopts="" -q
+
+  integration:
+    # Best-effort end-to-end smoke test against the real engine + ffmpeg.
+    # Advisory only: the engine download and software-Vulkan setup are outside
+    # our control, so a failure here must not redden the build. The job-level
+    # `continue-on-error` keeps it non-blocking while still surfacing its result.
+    name: integration smoke (ubuntu, py3.12)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and dev tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Mesa software Vulkan (lavapipe)
+        continue-on-error: true
+        run: sudo apt-get install -y mesa-vulkan-drivers
+
+      - name: Download Real-ESRGAN engine (best effort)
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/engine"
+          api="https://api.github.com/repos/xinntao/Real-ESRGAN-ncnn-vulkan/releases/latest"
+          url="$(curl -fsSL "$api" | python -c 'import json,sys; print(next(a["browser_download_url"] for a in json.load(sys.stdin)["assets"] if "ubuntu" in a["name"].lower()))')"
+          curl -fsSL "$url" -o /tmp/engine.zip
+          unzip -q /tmp/engine.zip -d "$HOME/engine"
+          bin="$(find "$HOME/engine" -type f -name 'realesrgan-ncnn-vulkan' -print -quit)"
+          test -n "$bin"
+          chmod +x "$bin"
+          echo "SKALA_ENGINE=$bin" >> "$GITHUB_ENV"
+
+      - name: Integration smoke tests
+        env:
+          SKALA_RUN_INTEGRATION: "1"
+        run: python -m pytest tests/test_integration.py -o addopts="" -q
