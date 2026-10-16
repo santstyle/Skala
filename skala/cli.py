@@ -7,7 +7,9 @@ directly inside a folder. Options not given on the command line fall back to
 ``skala <input>`` is shorthand for the ``run`` command, which is the default:
 any first argument that is not a known subcommand (``run``, ``doctor``) is
 treated as the path to process. ``skala doctor`` reports whether the external
-tools are available.
+tools are available. A bare ``skala`` in a terminal starts a short guided
+prompt (pick a file, then a scale) and runs the job; without a terminal it
+prints the help text.
 
 Exit codes: ``0`` success, ``1`` a :class:`~skala.utils.SkalaError` (bad input,
 missing tool, engine failure), ``2`` usage error (raised by Typer), ``130``
@@ -17,6 +19,7 @@ interrupted (Ctrl+C).
 from __future__ import annotations
 
 import platform
+import sys
 import time
 from pathlib import Path
 from typing import Annotated, NoReturn, TypeVar
@@ -214,6 +217,74 @@ def _dry_run(kind: str, source: Path, scale: int, model: str, destination: Path 
     typer.echo(f"[dry-run] {kind} {source.name} -> {target} ({scale}x via {detail}, model={model})")
 
 
+#: Prompt shown while asking for the upscale factor in interactive mode.
+_INTERACTIVE_SCALE_PROMPT = "Upscale factor (2, 3, 4 or 8)"
+
+
+def _wants_interactive() -> bool:
+    """Return True when a bare ``skala`` should start the guided prompt flow.
+
+    The prompts need a real terminal. When stdin is a pipe or a file (scripts,
+    CI, :class:`~typer.testing.CliRunner`) Skala prints help instead of waiting
+    on an answer that will never arrive.
+    """
+    return sys.stdin.isatty()
+
+
+def _prompt_source() -> Path:
+    """Prompt until the user names an existing file or folder."""
+    while True:
+        raw = typer.prompt("File or folder to upscale")
+        text = raw.strip().strip("\"'")
+        if not text:
+            typer.secho("  please type a path", fg=typer.colors.RED, err=True)
+            continue
+        candidate = Path(text).expanduser()
+        try:
+            validate_input_path(candidate)
+        except SkalaError as exc:
+            typer.secho(f"  {exc}", fg=typer.colors.RED, err=True)
+            continue
+        return candidate
+
+
+def _prompt_scale() -> int:
+    """Prompt until the user picks one of :data:`~skala.scaling.VALID_SCALES`."""
+    choices = ", ".join(str(item) for item in VALID_SCALES)
+    while True:
+        raw = typer.prompt(_INTERACTIVE_SCALE_PROMPT, default="4")
+        text = raw.strip()
+        if text.isdigit() and int(text) in VALID_SCALES:
+            return int(text)
+        typer.secho(f"  choose one of: {choices}", fg=typer.colors.RED, err=True)
+
+
+def _interactive(ctx: typer.Context) -> None:
+    """Run the guided prompts, then dispatch to the default ``run`` command."""
+    typer.secho("Skala interactive mode", fg=typer.colors.CYAN, bold=True)
+    typer.echo("Answer a few prompts; press Ctrl+C to cancel.\n")
+
+    try:
+        source = _prompt_source()
+        scale = _prompt_scale()
+    except click.Abort:
+        typer.secho("\naborted", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(130) from None
+
+    typer.echo()
+    group = ctx.command
+    if not isinstance(group, click.Group):  # pragma: no cover - the root is always a group
+        _fail("internal error: the 'run' command is unavailable")
+    command = group.get_command(ctx, _DEFAULT_COMMAND)
+    if command is None:  # pragma: no cover - the run command is always registered
+        _fail("internal error: the 'run' command is unavailable")
+
+    with command.make_context(
+        _DEFAULT_COMMAND, [str(source), "--scale", str(scale)], parent=ctx
+    ) as sub:
+        command.invoke(sub)
+
+
 @app.callback()
 def root(
     ctx: typer.Context,
@@ -226,6 +297,10 @@ def root(
 
     if ctx.invoked_subcommand is not None:
         return
+
+    if _wants_interactive():
+        _interactive(ctx)
+        raise typer.Exit()
 
     typer.echo(ctx.get_help())
     raise typer.Exit()

@@ -181,6 +181,75 @@ def test_default_argument_routes_to_run(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert len(spy.calls) == 1
 
 
+# --------------------------------------------------------------------------- interactive
+
+
+def test_bare_invocation_skips_interactive_without_tty() -> None:
+    # CliRunner's stdin is not a TTY, so a bare `skala` prints help, not prompts.
+    result = RUNNER.invoke(app, [])
+    assert result.exit_code == 0
+    assert "Usage" in result.output
+    assert "File or folder to upscale" not in result.output
+
+
+def test_interactive_prompts_for_source_then_scale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = _png(tmp_path / "photo.png")
+    spy = _ImageSpy()
+    monkeypatch.setattr(cli, "upscale_image", spy)
+    monkeypatch.setattr(cli, "_wants_interactive", lambda: True)
+    result = RUNNER.invoke(app, [], input=f"{source}\n2\n")
+    assert result.exit_code == 0, _text(result)
+    assert len(spy.calls) == 1
+    assert spy.calls[0]["input"] == source
+    assert spy.calls[0]["scale"] == 2
+
+
+def test_interactive_retries_after_a_bad_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = _png(tmp_path / "photo.png")
+    spy = _ImageSpy()
+    monkeypatch.setattr(cli, "upscale_image", spy)
+    monkeypatch.setattr(cli, "_wants_interactive", lambda: True)
+    missing = tmp_path / "nope.png"
+    result = RUNNER.invoke(app, [], input=f"{missing}\n{source}\n3\n")
+    assert result.exit_code == 0, _text(result)
+    assert len(spy.calls) == 1
+    assert spy.calls[0]["scale"] == 3
+
+
+def test_interactive_rejects_an_invalid_scale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = _png(tmp_path / "photo.png")
+    spy = _ImageSpy()
+    monkeypatch.setattr(cli, "upscale_image", spy)
+    monkeypatch.setattr(cli, "_wants_interactive", lambda: True)
+    result = RUNNER.invoke(app, [], input=f"{source}\n5\n8\n")
+    assert result.exit_code == 0, _text(result)
+    assert spy.calls[0]["scale"] == 8
+
+
+def test_interactive_blank_scale_keeps_the_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = _png(tmp_path / "photo.png")
+    spy = _ImageSpy()
+    monkeypatch.setattr(cli, "upscale_image", spy)
+    monkeypatch.setattr(cli, "_wants_interactive", lambda: True)
+    result = RUNNER.invoke(app, [], input=f"{source}\n\n")
+    assert result.exit_code == 0, _text(result)
+    assert spy.calls[0]["scale"] == 4
+
+
+def test_interactive_abort_exits_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "_wants_interactive", lambda: True)
+    result = RUNNER.invoke(app, [], input="")
+    assert result.exit_code == 130
+
+
 # --------------------------------------------------------------------------- doctor
 
 

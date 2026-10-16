@@ -60,12 +60,16 @@ $ skala clip.mp4 --scale 2 --audio drop
 # See what would happen without running the engine
 $ skala clip.mp4 --scale 8 --dry-run
 
+# Let Skala ask for the file and the scale
+$ skala
+
 # Check that the external tools are reachable
 $ skala doctor
 ```
 
 `skala run` is the default command, so `skala photo.png` and
-`skala run photo.png` are the same thing.
+`skala run photo.png` are the same thing. Run `skala` with no arguments in a
+terminal and it [asks](#interactive-mode) for the file and the scale.
 
 ## Commands
 
@@ -76,6 +80,28 @@ $ skala doctor
 | `skala doctor` | Report whether the external tools are available |
 
 `skala --version` prints the version and exits.
+
+## Interactive mode
+
+Run `skala` with no arguments in a terminal and Skala walks you through the job
+instead of requiring flags:
+
+```console
+$ skala
+Skala interactive mode
+Answer a few prompts; press Ctrl+C to cancel.
+
+File or folder to upscale: ./shots
+Upscale factor (2, 3, 4 or 8) [4]: 2
+```
+
+It validates the path and the scale, re-prompting until each is acceptable, then
+runs exactly as if you had typed `skala ./shots --scale 2` — the same `run` code
+path, so `skala.toml` and the other options still apply.
+
+Interactive mode needs a real terminal. When stdin is not a TTY (piped input, CI,
+a task runner) a bare `skala` prints the help text instead of blocking on a
+prompt that will never be answered.
 
 ## Options
 
@@ -220,6 +246,23 @@ $ python -m mypy skala tests
 
 The external binaries are not required to run the tests: subprocess calls are
 mocked, so the suite runs on any machine.
+
+There is a small end-to-end suite (marked `integration`) that drives the real
+engine and ffmpeg instead of mocks. It is opt-in and skips itself when either
+tool is missing:
+
+```console
+$ SKALA_RUN_INTEGRATION=1 python -m pytest -m integration
+```
+
+On Windows PowerShell:
+
+```console
+$ $env:SKALA_RUN_INTEGRATION=1; python -m pytest -m integration
+```
+
+CI runs the mocked suite on Linux and Windows across Python 3.10-3.13, plus a
+best-effort integration job on Linux.
 
 ## License
 
