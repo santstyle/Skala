@@ -127,6 +127,50 @@ class TestWorkDir:
         assert utils.default_work_base().name == "skala"
 
 
+class TestSkalaHome:
+    def test_env_override_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SKALA_HOME", str(tmp_path / "custom"))
+        assert utils.skala_home() == tmp_path / "custom"
+
+    def test_env_override_beats_platform_defaults(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SKALA_HOME", str(tmp_path / "custom"))
+        monkeypatch.setattr(utils.sys, "platform", "linux")
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        assert utils.skala_home() == tmp_path / "custom"
+
+    def test_windows_uses_localappdata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SKALA_HOME", raising=False)
+        monkeypatch.setattr(utils.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", "/users/me/AppData/Local")
+        assert utils.skala_home() == Path("/users/me/AppData/Local") / "skala"
+
+    def test_windows_without_localappdata_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SKALA_HOME", raising=False)
+        monkeypatch.setattr(utils.sys, "platform", "win32")
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        assert utils.skala_home() == Path.home() / "AppData" / "Local" / "skala"
+
+    def test_linux_honours_xdg_data_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SKALA_HOME", raising=False)
+        monkeypatch.setattr(utils.sys, "platform", "linux")
+        monkeypatch.setenv("XDG_DATA_HOME", "/tmp/xdg")
+        assert utils.skala_home() == Path("/tmp/xdg") / "skala"
+
+    def test_linux_falls_back_to_local_share(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SKALA_HOME", raising=False)
+        monkeypatch.setattr(utils.sys, "platform", "linux")
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        assert utils.skala_home() == Path.home() / ".local" / "share" / "skala"
+
+    def test_no_directory_created(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "not-created"
+        monkeypatch.setenv("SKALA_HOME", str(target))
+        utils.skala_home()
+        assert not target.exists()
+
+
 class TestOutputHandling:
     def test_default_output_path(self, tmp_path: Path) -> None:
         src = tmp_path / "photo.jpeg"

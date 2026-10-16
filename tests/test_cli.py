@@ -8,6 +8,7 @@ kept separate by click and error text is written to stderr.
 
 from __future__ import annotations
 
+import os
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -18,8 +19,9 @@ from PIL import Image
 from skala import __version__
 from skala.cli import app
 from skala.config import SkalaConfig
-from skala.engine import DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL
+from skala.engine import DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, ENGINE_BINARY
 from skala.image import ImageResult
+from skala.setup import SetupResult
 from skala.utils import DependencyError, EngineError, HardwareStatus, InputError, MissingDependency
 from skala.video import (
     DEFAULT_CRF,
@@ -295,6 +297,39 @@ def test_doctor_reports_missing_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     assert "vulkan: unknown (unknown)" in result.output
     assert "ffmpeg tool missing: ffmpeg" in _text(result)
+
+
+# --------------------------------------------------------------------------- setup
+
+
+def test_setup_dry_run_prints_plan_without_writing(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    result = RUNNER.invoke(app, ["setup", "--dry-run", "--home", str(home)])
+    assert result.exit_code == 0
+    assert "[dry-run] would install" in result.output
+    assert "source: the newest release" in result.output
+    assert not home.exists()
+
+
+def test_setup_dry_run_notes_existing_engine(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    engine_dir = home / "engine"
+    engine_dir.mkdir(parents=True)
+    name = f"{ENGINE_BINARY}.exe" if os.name == "nt" else ENGINE_BINARY
+    (engine_dir / name).write_text("stub")
+    result = RUNNER.invoke(app, ["setup", "--dry-run", "--home", str(home)])
+    assert result.exit_code == 0
+    assert "already exists and --force would replace it" in result.output
+
+
+def test_setup_reports_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(**kwargs: Any) -> SetupResult:
+        raise DependencyError("no engine release found")
+
+    monkeypatch.setattr(cli, "setup_engine", _raise)
+    result = RUNNER.invoke(app, ["setup"])
+    assert result.exit_code == 1
+    assert "no engine release found" in _text(result)
 
 
 # --------------------------------------------------------------------------- image

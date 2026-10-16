@@ -41,6 +41,7 @@ from .engine import (
     DEFAULT_VIDEO_MODEL,
     build_command,
     discover_engine,
+    managed_model_dir,
     model_spec,
     run_engine,
     tile_retry_sequence,
@@ -556,6 +557,8 @@ def upscale_video(
             logger.info("reusing %s previously extracted frames", frames)
 
         engine_bin = discover_engine(engine_path)
+        if model_dir is None:
+            model_dir = managed_model_dir(engine_bin)
         upscaled_dir = _upscale_frames(
             engine_bin,
             frames_dir,

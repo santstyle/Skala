@@ -10,10 +10,18 @@ no external tools installed.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
 _ENV_FLAG = "SKALA_RUN_INTEGRATION"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_skala_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point ``SKALA_HOME`` at a temp dir so tests never touch a real install."""
+    monkeypatch.setenv("SKALA_HOME", str(tmp_path / "skala-home"))
+    monkeypatch.delenv("SKALA_ENGINE", raising=False)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

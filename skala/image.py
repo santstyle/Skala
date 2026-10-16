@@ -36,6 +36,7 @@ from .engine import (
     DEFAULT_IMAGE_MODEL,
     build_command,
     discover_engine,
+    managed_model_dir,
     model_spec,
     run_engine,
     tile_retry_sequence,
@@ -354,6 +355,8 @@ def upscale_image(
     logger.debug("estimated scratch requirement: %s", format_bytes(needed))
 
     engine_bin = discover_engine(engine_path)
+    if model_dir is None:
+        model_dir = managed_model_dir(engine_bin)
 
     base = Path(work_base) if work_base is not None else default_work_base()
     base.mkdir(parents=True, exist_ok=True)

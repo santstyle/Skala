@@ -334,6 +334,35 @@ def test_missing_engine_raises_actionable_error(
 
 
 # ---------------------------------------------------------------------------------
+# managed_model_dir
+# ---------------------------------------------------------------------------------
+def test_managed_model_dir_returns_sibling_models(tmp_path: Path) -> None:
+    binary = _write_engine(tmp_path)
+    (tmp_path / "models").mkdir()
+    found = engine.managed_model_dir(binary)
+    assert found is not None
+    assert found == tmp_path.resolve() / "models"
+
+
+def test_managed_model_dir_returns_none_without_models(tmp_path: Path) -> None:
+    binary = _write_engine(tmp_path)
+    assert engine.managed_model_dir(binary) is None
+
+
+def test_managed_model_dir_rejects_models_that_are_a_file(tmp_path: Path) -> None:
+    binary = _write_engine(tmp_path)
+    (tmp_path / "models").write_text("not a directory")
+    assert engine.managed_model_dir(binary) is None
+
+
+def test_managed_model_dir_does_not_require_the_binary_to_exist(tmp_path: Path) -> None:
+    (tmp_path / "models").mkdir()
+    found = engine.managed_model_dir(str(tmp_path / "missing-binary"))
+    assert found is not None
+    assert found.is_dir()
+
+
+# ---------------------------------------------------------------------------------
 # run_engine
 # ---------------------------------------------------------------------------------
 def _argv(tile: int = 0) -> list[str]:

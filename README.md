@@ -1,10 +1,14 @@
 # Skala
 
 Skala upscales images and videos 2x-8x from the command line. It trains nothing
-itself: it orchestrates two external tools you install separately —
-[Real-ESRGAN (ncnn/Vulkan)](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
-for the super-resolution pass, and ffmpeg/ffprobe for video demuxing and muxing.
-Runs on Windows and Linux, Python 3.10+.
+itself: it orchestrates two external tools — [Real-ESRGAN
+(ncnn/Vulkan)](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan) for the
+super-resolution pass, and ffmpeg/ffprobe for video demuxing and muxing. Runs on
+Windows and Linux, Python 3.10+.
+
+`skala setup` downloads the engine binary and its bundled `models/` folder into a
+per-user data directory, so the only tool you must provide yourself is
+ffmpeg/ffprobe — and only for video.
 
 One command does the obvious thing:
 
@@ -20,11 +24,12 @@ folder and it figures out the rest.
 | Requirement | Needed for | Notes |
 | --- | --- | --- |
 | Python 3.10+ | everything | |
-| `realesrgan-ncnn-vulkan` | everything | the binary **and** its `models/` folder |
+| `realesrgan-ncnn-vulkan` | everything | the binary **and** its `models/` folder; `skala setup` installs it |
 | `ffmpeg` + `ffprobe` | video only | images work without them |
 
-Skala never bundles these. Run `skala doctor` to check what the current machine
-is missing, and see [External tools](#external-tools) for where Skala looks.
+Skala never bundles these: `skala setup` fetches the engine and its models on
+demand. Run `skala doctor` to check what the current machine is missing, and see
+[External tools](#external-tools) for where Skala looks.
 
 ## Install
 
@@ -45,6 +50,9 @@ $ python -m pip install -e ".[dev]"
 ## Quick start
 
 ```console
+# Download the engine + its models into the Skala data directory
+$ skala setup
+
 # Upscale an image 4x (default scale) using the default photo model
 $ skala photo.png
 
@@ -77,9 +85,41 @@ terminal and it [asks](#interactive-mode) for the file and the scale.
 | --- | --- |
 | `skala [SOURCE] [options]` | Upscale a file or folder (default command) |
 | `skala run [SOURCE] [options]` | Same, spelled out explicitly |
+| `skala setup [options]` | Download the engine binary and its `models/` folder |
 | `skala doctor` | Report whether the external tools are available |
 
 `skala --version` prints the version and exits.
+
+## Installing the engine
+
+`skala setup` downloads the newest Real-ESRGAN engine release for your OS and
+unpacks it — binary plus `models/` — into the Skala data directory:
+
+```console
+# Show the plan without downloading anything
+$ skala setup --dry-run
+
+# Install or upgrade the engine
+$ skala setup
+
+# Reinstall even if an engine is already present
+$ skala setup --force
+
+# Pin a specific release tag
+$ skala setup --version v0.2.5.0
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--version TAG` | Pin a specific engine release tag. |
+| `--force` | Reinstall even if an engine is already present. |
+| `--dry-run` | Print the plan and exit; no network access, no writes. |
+| `--home PATH` | Install root. Defaults to the Skala data directory. |
+
+The data directory is `%LOCALAPPDATA%\skala` on Windows and
+`$XDG_DATA_HOME/skala` (usually `~/.local/share/skala`) elsewhere; override it
+with `SKALA_HOME` or `--home`. The binary lands in `<data dir>/engine`, with its
+`models/` folder beside it, where the rest of Skala picks it up automatically.
 
 ## Interactive mode
 
@@ -203,13 +243,16 @@ Skala finds the engine in this order, first hit wins:
 
 1. `--engine-path`
 2. the `$SKALA_ENGINE` environment variable
-3. a `bin/` folder next to where you run Skala
-4. your `PATH`
+3. the managed install from `skala setup` (`<data dir>/engine`)
+4. a `bin/` folder next to where you run Skala
+5. your `PATH`
 
 The engine binary is called `realesrgan-ncnn-vulkan` (`realesrgan-ncnn-vulkan.exe`
-on Windows). If none is found you get a clear error naming the missing tool rather
-than a stack trace. ffmpeg and ffprobe are resolved the same way via
-`--ffmpeg-path` / `--ffprobe-path` and `PATH`.
+on Windows). Its `models/` folder is used automatically when it sits next to the
+binary; `--model-dir` points at one somewhere else. If no engine is found you get
+a clear error naming the missing tool rather than a stack trace. ffmpeg and
+ffprobe are resolved the same way via `--ffmpeg-path` / `--ffprobe-path` and
+`PATH`.
 
 ## Exit codes
 
@@ -225,7 +268,8 @@ the run still exits `1` so scripts can detect it.
 
 ## Known limitations
 
-- The engine must be installed by you; Skala does not download models.
+- Skala trains and ships no models; `skala setup` only downloads the engine
+  release, which bundles its own `models/` folder.
 - `--scale` must follow the input path on the command line.
 - `--version` only works at the top level (`skala --version`), not after `run`.
 - A file literally named `doctor` is ambiguous with the `doctor` subcommand —

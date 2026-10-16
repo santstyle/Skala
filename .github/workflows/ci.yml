@@ -78,8 +78,10 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p "$HOME/engine"
-          api="https://api.github.com/repos/xinntao/Real-ESRGAN-ncnn-vulkan/releases/latest"
-          url="$(curl -fsSL "$api" | python -c 'import json,sys; print(next(a["browser_download_url"] for a in json.load(sys.stdin)["assets"] if "ubuntu" in a["name"].lower()))')"
+          # `releases/latest` carries no assets, so scan the release list for the newest ubuntu zip.
+          api="https://api.github.com/repos/xinntao/Real-ESRGAN/releases"
+          url="$(curl -fsSL "$api" | python -c 'import json,sys; data=json.load(sys.stdin); print(next((a["browser_download_url"] for r in data for a in r.get("assets", []) if "ubuntu" in a["name"].lower() and a["name"].lower().endswith(".zip")), ""))')"
+          test -n "$url"
           curl -fsSL "$url" -o /tmp/engine.zip
           unzip -q /tmp/engine.zip -d "$HOME/engine"
           bin="$(find "$HOME/engine" -type f -name 'realesrgan-ncnn-vulkan' -print -quit)"

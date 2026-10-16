@@ -5,11 +5,12 @@ directly inside a folder. Options not given on the command line fall back to
 ``skala.toml`` and then to built-in defaults (see :mod:`skala.config`).
 
 ``skala <input>`` is shorthand for the ``run`` command, which is the default:
-any first argument that is not a known subcommand (``run``, ``doctor``) is
-treated as the path to process. ``skala doctor`` reports whether the external
-tools are available. A bare ``skala`` in a terminal starts a short guided
-prompt (pick a file, then a scale) and runs the job; without a terminal it
-prints the help text.
+any first argument that is not a known subcommand (``run``, ``setup``,
+``doctor``) is treated as the path to process. ``skala setup`` downloads the
+engine binary and its models into the Skala data directory, and ``skala doctor``
+reports whether the external tools are available. A bare ``skala`` in a terminal
+starts a short guided prompt (pick a file, then a scale) and runs the job;
+without a terminal it prints the help text.
 
 Exit codes: ``0`` success, ``1`` a :class:`~skala.utils.SkalaError` (bad input,
 missing tool, engine failure), ``2`` usage error (raised by Typer), ``130``
@@ -33,6 +34,7 @@ from .config import AUDIO_CHOICES, load_config
 from .engine import (
     DEFAULT_IMAGE_MODEL,
     DEFAULT_VIDEO_MODEL,
+    ENGINE_BINARY,
     MODEL_SPECS,
     DependencyError,
     discover_engine,
@@ -40,6 +42,7 @@ from .engine import (
 )
 from .image import ImageResult, inspect_image, upscale_image
 from .scaling import VALID_SCALES, plan_scale
+from .setup import asset_os_token, setup_engine
 from .utils import (
     InputError,
     SkalaError,
@@ -503,6 +506,59 @@ def run(
         )
     if failures:
         raise typer.Exit(1)
+
+
+@app.command()
+def setup(
+    version: Annotated[
+        str | None,
+        typer.Option("--version", help="Pin a specific engine release tag."),
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Reinstall even if present.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show the plan, then exit.")] = False,
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Install root (default: the Skala data directory)."),
+    ] = None,
+) -> None:
+    """Download the engine binary and its models into the Skala data directory."""
+    try:
+        result = setup_engine(home=home, version=version, force=force, dry_run=dry_run)
+        token = asset_os_token()
+    except SkalaError as exc:
+        _fail(str(exc))
+
+    if result.action == "plan":
+        typer.echo(f"[dry-run] would install {ENGINE_BINARY} into {result.engine_dir}")
+        typer.echo(f"  source: the newest release with a {token} engine zip")
+        if result.engine_binary.is_file():
+            typer.echo(
+                f"  note: {result.engine_binary} already exists and --force would replace it"
+            )
+        return
+
+    if result.action == "reuse":
+        typer.secho(f"engine already installed at {result.engine_binary}", fg=typer.colors.GREEN)
+    else:
+        verb = "upgraded" if result.action == "upgrade" else "installed"
+        label = result.version or result.asset_name or "latest"
+        typer.echo(f"{verb} {ENGINE_BINARY} ({label}) at {result.engine_binary}")
+
+    if result.models_dir is not None:
+        typer.echo(f"models: {result.models_dir}")
+    else:
+        typer.secho(
+            "warning: no models/ folder next to the engine; pass --model-dir to locate one",
+            fg=typer.colors.YELLOW,
+        )
+
+    missing = missing_ffmpeg()
+    if missing:
+        typer.secho(
+            f"note: video also needs ffmpeg/ffprobe ({len(missing)} missing)",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
 
 @app.command()

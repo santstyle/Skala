@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
+    "ENV_HOME",
     "DependencyError",
     "DiskSpaceError",
     "EngineError",
@@ -35,11 +36,15 @@ __all__ = [
     "get_logger",
     "require_free_space",
     "setup_logging",
+    "skala_home",
     "validate_input_path",
     "work_dir",
 ]
 
 _LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+
+#: Environment variable overriding the root of Skala-managed downloads.
+ENV_HOME = "SKALA_HOME"
 
 
 # --------------------------------------------------------------------------------------
@@ -208,6 +213,26 @@ def default_work_base() -> Path:
     if env:
         return Path(env) / "skala"
     return Path(tempfile.gettempdir()) / "skala"
+
+
+# --------------------------------------------------------------------------------------
+# Managed install location
+# --------------------------------------------------------------------------------------
+def skala_home() -> Path:
+    """Return the root directory for Skala-managed downloads.
+
+    Honours ``$SKALA_HOME``; otherwise a per-user data directory is used:
+    ``%LOCALAPPDATA%/skala`` on Windows and ``$XDG_DATA_HOME/skala`` (falling
+    back to ``~/.local/share/skala``) elsewhere. The directory is not created.
+    """
+    override = os.environ.get(ENV_HOME)
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        return Path(local) / "skala" if local else Path.home() / "AppData" / "Local" / "skala"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return Path(xdg) / "skala" if xdg else Path.home() / ".local" / "share" / "skala"
 
 
 # --------------------------------------------------------------------------------------

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from logging import Logger
 from pathlib import Path
 
-from .utils import DependencyError, EngineError, InputError, get_logger
+from .utils import DependencyError, EngineError, InputError, get_logger, skala_home
 
 __all__ = [
     "DEFAULT_IMAGE_MODEL",
@@ -45,6 +45,7 @@ __all__ = [
     "ModelSpec",
     "build_command",
     "discover_engine",
+    "managed_model_dir",
     "model_spec",
     "run_engine",
     "tile_retry_sequence",
@@ -117,8 +118,20 @@ def _resolve_engine(path: str | os.PathLike[str]) -> Path | None:
     return None
 
 
+def _first_in_dir(directory: Path) -> Path | None:
+    """Return the first engine binary present in ``directory``, or ``None``."""
+    for name in _candidate_names():
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
 def discover_engine(explicit: str | os.PathLike[str] | None = None) -> Path:
-    """Return the engine binary path, searching explicit, env, ``./bin``, then ``PATH``.
+    """Return the engine binary path, or raise if none can be found.
+
+    Searched in order: ``explicit``, ``$SKALA_ENGINE``, the managed install
+    created by ``skala setup``, ``./bin``, then ``PATH``.
 
     Raises:
         DependencyError: when no usable binary can be found.
@@ -136,20 +149,29 @@ def discover_engine(explicit: str | os.PathLike[str] | None = None) -> Path:
             raise DependencyError(f"{ENV_ENGINE} is set to {from_env!r}, but no such file exists")
         return found
 
-    bin_dir = Path.cwd() / "bin"
-    for name in _candidate_names():
-        candidate = bin_dir / name
-        if candidate.is_file():
-            return candidate.resolve()
+    for directory in (skala_home() / "engine", Path.cwd() / "bin"):
+        found = _first_in_dir(directory)
+        if found is not None:
+            return found
 
     located = shutil.which(ENGINE_BINARY)
     if located:
         return Path(located).resolve()
 
     raise DependencyError(
-        f"could not find the {ENGINE_BINARY} binary. Install it and add it to PATH, "
-        f"place it in ./bin/, or pass --engine-path / set {ENV_ENGINE}."
+        f"could not find the {ENGINE_BINARY} binary. Run 'skala setup' to install it, "
+        f"add it to PATH, place it in ./bin/, or pass --engine-path / set {ENV_ENGINE}."
     )
+
+
+def managed_model_dir(engine: str | os.PathLike[str]) -> Path | None:
+    """Return the ``models`` folder shipped next to ``engine``, or ``None``.
+
+    ``skala setup`` installs the bundled models beside the binary; this detects
+    that layout so ``--model-dir`` can stay optional for managed installs.
+    """
+    models = Path(engine).resolve().parent / "models"
+    return models if models.is_dir() else None
 
 
 def model_spec(model: str) -> ModelSpec:
