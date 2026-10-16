@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import FrozenInstanceError
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from PIL import Image
@@ -101,7 +102,14 @@ class _FakeTools:
         self.encode_fail = False
         self.encode_writes = True
 
-    def __call__(self, argv: Sequence[str], log: Any = None) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self,
+        argv: Sequence[str],
+        log: Any = None,
+        *,
+        progress_total: int | None = None,
+        progress_desc: str = "",
+    ) -> subprocess.CompletedProcess[str]:
         recorded = list(argv)
         self.calls.append(recorded)
         if "-print_format" in recorded:
@@ -186,6 +194,40 @@ def fake_tools(monkeypatch: pytest.MonkeyPatch) -> Any:
     return install
 
 
+class _FakeBar:
+    """Stand-in for ``tqdm`` that records construction kwargs and updates."""
+
+    def __init__(self, *, total: int, desc: str, unit: str, leave: bool) -> None:
+        self.total = total
+        self.desc = desc
+        self.unit = unit
+        self.leave = leave
+        self.updates: list[int] = []
+
+    def update(self, amount: int) -> None:
+        self.updates.append(amount)
+
+    def __enter__(self) -> _FakeBar:
+        return self
+
+    def __exit__(self, *exc: object) -> Literal[False]:
+        return False
+
+
+@pytest.fixture()
+def fake_bar(monkeypatch: pytest.MonkeyPatch) -> list[_FakeBar]:
+    """Replace ``video.tqdm`` with a factory that records the bars it builds."""
+    bars: list[_FakeBar] = []
+
+    def _factory(**kwargs: Any) -> _FakeBar:
+        bar = _FakeBar(**kwargs)
+        bars.append(bar)
+        return bar
+
+    monkeypatch.setattr(video, "tqdm", _factory)
+    return bars
+
+
 # --------------------------------------------------------------------------------------
 # Pure helpers
 # --------------------------------------------------------------------------------------
@@ -214,6 +256,17 @@ def test_parse_float_rejects_non_positive_and_garbage() -> None:
     assert video._parse_float("N/A") is None
     assert video._parse_float(None) is None
     assert video._parse_float("abc") is None
+
+
+def test_parse_progress_line_splits_key_and_value() -> None:
+    assert video._parse_progress_line("frame=42") == ("frame", "42")
+    assert video._parse_progress_line("  progress=continue  ") == ("progress", "continue")
+
+
+def test_parse_progress_line_rejects_non_pairs() -> None:
+    assert video._parse_progress_line("frame") is None
+    assert video._parse_progress_line("") is None
+    assert video._parse_progress_line("=value") is None
 
 
 def test_estimate_workspace_counts_source_intermediate_and_final() -> None:
@@ -272,6 +325,50 @@ def test_video_info_fps_text_and_expected_frames() -> None:
         nb_frames=None,
     )
     assert empty.expected_frames() == 1
+
+
+# --------------------------------------------------------------------------------------
+# Progress streaming
+# --------------------------------------------------------------------------------------
+def test_run_streaming_updates_bar_with_frame_counts(fake_bar: list[_FakeBar]) -> None:
+    script = "import sys\nfor n in range(1, 4):\n    print(f'frame={n}')\n    sys.stdout.flush()\n"
+    result = video._run_streaming(
+        [sys.executable, "-c", script], total=3, desc="frames", log=video._log
+    )
+    assert result.returncode == 0
+    assert len(fake_bar) == 1
+    assert fake_bar[0].total == 3
+    assert fake_bar[0].desc == "frames"
+    assert sum(fake_bar[0].updates) == 3
+
+
+def test_run_streaming_ignores_non_frame_lines(fake_bar: list[_FakeBar]) -> None:
+    script = (
+        "import sys\n"
+        "print('progress=continue')\n"
+        "print('no-equals-line')\n"
+        "print('frame=2')\n"
+        "sys.stdout.flush()\n"
+    )
+    result = video._run_streaming(
+        [sys.executable, "-c", script], total=2, desc="frames", log=video._log
+    )
+    assert result.returncode == 0
+    assert fake_bar[0].updates == [2]
+
+
+def test_run_streaming_returns_nonzero_exit_and_stderr(fake_bar: list[_FakeBar]) -> None:
+    script = "import sys\nsys.stderr.write('boom')\nsys.exit(3)\n"
+    result = video._run_streaming(
+        [sys.executable, "-c", script], total=1, desc="frames", log=video._log
+    )
+    assert result.returncode == 3
+    assert "boom" in result.stderr
+
+
+def test_run_streaming_missing_binary_raises_dependency_error(fake_bar: list[_FakeBar]) -> None:
+    with pytest.raises(DependencyError):
+        video._run_streaming(["skala-not-a-real-tool-xyz"], total=1, desc="frames", log=video._log)
 
 
 # --------------------------------------------------------------------------------------
@@ -379,6 +476,16 @@ def test_upscale_video_extract_uses_vsync_and_pattern(tmp_path: Path, fake_tools
     extract = tools.extract_calls()[0]
     assert extract[extract.index("-vsync") + 1] == "0"
     assert extract[-1].endswith("%08d.png")
+    assert "-nostats" in extract
+    assert extract[extract.index("-progress") + 1] == "pipe:1"
+
+
+def test_upscale_video_encode_streams_progress(tmp_path: Path, fake_tools: Any) -> None:
+    tools, _ = fake_tools()
+    video.upscale_video(_source(tmp_path), scale=4, work_base=tmp_path)
+    encode = tools.encode_calls()[0]
+    assert "-nostats" in encode
+    assert encode[encode.index("-progress") + 1] == "pipe:1"
 
 
 def test_upscale_video_copies_audio_by_default(tmp_path: Path, fake_tools: Any) -> None:

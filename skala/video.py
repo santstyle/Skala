@@ -19,8 +19,9 @@ the working directory is deterministic for a given (input, scale, model, tile) a
 kept on failure. A rerun reuses completed frames and only redoes the stages that are
 incomplete. On success the directory is removed unless ``keep_temp`` is set.
 
-Frame-accurate progress is impossible while a single engine invocation owns the whole
-sequence, so the stages are logged rather than counted with a progress bar.
+The two ffmpeg stages report their frame counts through ``-progress pipe:1``, so each
+drives a progress bar. The engine passes are logged rather than counted: a single
+invocation owns the whole sequence, so per-frame progress is not available from it.
 """
 
 from __future__ import annotations
@@ -29,12 +30,15 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from logging import Logger
 from pathlib import Path
+
+from tqdm import tqdm
 
 from .config import AUDIO_CHOICES
 from .engine import (
@@ -150,7 +154,85 @@ def _tail(text: str, limit: int = 800) -> str:
     return "..." + stripped[-limit:]
 
 
-def _run(argv: Sequence[str], log: Logger) -> subprocess.CompletedProcess[str]:
+def _parse_progress_line(line: str) -> tuple[str, str] | None:
+    """Split an ffmpeg ``-progress`` line into ``(key, value)``.
+
+    Returns ``None`` for anything that is not a ``key=value`` line.
+    """
+    key, separator, value = line.strip().partition("=")
+    if not separator or not key:
+        return None
+    return key, value
+
+
+def _run_streaming(
+    argv: Sequence[str],
+    *,
+    total: int,
+    desc: str,
+    log: Logger,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command while reading ffmpeg ``-progress`` output into a tqdm bar.
+
+    stdout carries the ``-progress`` key/value lines and is consumed line by line;
+    stderr is diverted to a temporary file so a verbose command cannot fill a pipe and
+    deadlock. The captured stderr is replayed in the returned result, and the tqdm bar
+    disables itself when stderr is not a TTY, keeping captured logs clean.
+    """
+    command = list(argv)
+    log.debug("running: %s", " ".join(command))
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errors:
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except FileNotFoundError as exc:
+            raise DependencyError(f"could not execute {argv[0]!r}: {exc}") from exc
+        seen = 0
+        stdout = process.stdout
+        try:
+            if stdout is not None:
+                with tqdm(total=total, desc=desc, unit="frame", leave=False) as bar:
+                    for line in stdout:
+                        parsed = _parse_progress_line(line)
+                        if parsed is None or parsed[0] != "frame":
+                            continue
+                        try:
+                            count = int(parsed[1])
+                        except ValueError:
+                            continue
+                        bar.update(max(0, count - seen))
+                        seen = count
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        code = process.wait()
+        errors.seek(0)
+        stderr_text = errors.read()
+    return subprocess.CompletedProcess(command, code, "", stderr_text)
+
+
+def _run(
+    argv: Sequence[str],
+    log: Logger,
+    *,
+    progress_total: int | None = None,
+    progress_desc: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Run ``argv``, optionally while streaming an ffmpeg progress bar.
+
+    With ``progress_total`` set the command is expected to emit ffmpeg ``-progress``
+    output on stdout and :func:`_run_streaming` drives a bar; otherwise the output is
+    captured wholesale.
+    """
+    if progress_total is not None:
+        return _run_streaming(argv, total=progress_total, desc=progress_desc, log=log)
     log.debug("running: %s", " ".join(argv))
     try:
         return subprocess.run(
@@ -320,10 +402,21 @@ def _count_frames(directory: Path) -> int:
     return sum(1 for _ in directory.glob("*.png"))
 
 
-def _extract(ffmpeg: str, source: Path, frames_dir: Path, log: Logger) -> int:
+def _extract(ffmpeg: str, source: Path, frames_dir: Path, log: Logger, *, expected: int) -> int:
     """Extract every frame as a numbered PNG and return the count."""
-    argv = [ffmpeg, "-y", "-i", str(source), "-vsync", "0", _frame_pattern(frames_dir)]
-    result = _run(argv, log)
+    argv = [
+        ffmpeg,
+        "-y",
+        "-nostats",
+        "-progress",
+        "pipe:1",
+        "-i",
+        str(source),
+        "-vsync",
+        "0",
+        _frame_pattern(frames_dir),
+    ]
+    result = _run(argv, log, progress_total=expected, progress_desc="extracting frames")
     if result.returncode != 0:
         raise SkalaError(
             f"ffmpeg failed to extract frames from {source} (exit {result.returncode}):\n"
@@ -403,6 +496,7 @@ def _encode(
     destination: Path,
     info: VideoInfo,
     *,
+    frames: int,
     crf: int,
     video_codec: str,
     audio: str,
@@ -414,6 +508,9 @@ def _encode(
     argv = [
         ffmpeg,
         "-y",
+        "-nostats",
+        "-progress",
+        "pipe:1",
         "-framerate",
         info.fps_text,
         "-i",
@@ -429,7 +526,7 @@ def _encode(
         argv += ["-vf", f"scale={final_size[0]}:{final_size[1]}"]
     argv.append(str(destination))
 
-    result = _run(argv, log)
+    result = _run(argv, log, progress_total=frames, progress_desc="encoding video")
     if result.returncode != 0:
         raise SkalaError(
             f"ffmpeg failed to encode {destination} (exit {result.returncode}):\n"
@@ -552,7 +649,7 @@ def upscale_video(
         frames_dir.mkdir(parents=True, exist_ok=True)
         frames = _count_frames(frames_dir)
         if frames == 0:
-            frames = _extract(ffmpeg, source, frames_dir, logger)
+            frames = _extract(ffmpeg, source, frames_dir, logger, expected=info.expected_frames())
         else:
             logger.info("reusing %s previously extracted frames", frames)
 
@@ -577,6 +674,7 @@ def upscale_video(
             upscaled_dir,
             destination,
             info,
+            frames=frames,
             crf=crf,
             video_codec=video_codec,
             audio=audio,
