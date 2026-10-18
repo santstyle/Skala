@@ -1,5 +1,9 @@
 # Skala
 
+<p align="center">
+  <img src="docs/banner.png" alt="Skala — image upscaling CLI" />
+</p>
+
 Skala upscales images and videos 2x-8x from the command line. It trains nothing
 itself: it orchestrates two external tools — [Real-ESRGAN
 (ncnn/Vulkan)](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan) for the
