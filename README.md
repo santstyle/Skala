@@ -37,13 +37,70 @@ demand. Run `skala doctor` to check what the current machine is missing, and see
 
 ## Install
 
-From source (Skala is not on PyPI):
+Skala is not on PyPI, so you install it from source. Here is the whole process,
+start to finish.
+
+**1. Install Python 3.10 or newer** from
+[python.org](https://www.python.org/downloads/). On Windows, tick **"Add python.exe
+to PATH"** in the installer.
+
+**2. Download the code.** `git clone` needs
+[Git](https://git-scm.com/downloads); or grab the ZIP from the
+[repository page](https://github.com/santstyle/Skala) and unzip it.
 
 ```console
 $ git clone https://github.com/santstyle/Skala.git
 $ cd Skala
+```
+
+**3. Install Skala into a virtual environment.** This keeps it out of your system
+Python and avoids "module not found" surprises:
+
+```console
+# Windows (PowerShell)
+$ py -m venv .venv
+$ .\.venv\Scripts\Activate.ps1
+
+# Windows (cmd)
+$ py -m venv .venv
+$ .venv\Scripts\activate
+
+# macOS / Linux
+$ python3 -m venv .venv
+$ source .venv/bin/activate
+```
+
+Once the prompt shows `(.venv)`, install the package — the trailing `.` is the
+folder you just cloned:
+
+```console
 $ python -m pip install -e .
 ```
+
+Prefer your normal Python instead? Skip the `venv` step and run
+`python -m pip install -e .` (use `py` in place of `python` on Windows if that is
+how your Python is registered).
+
+**4. Download the engine.** Skala bundles no models, so fetch the engine and its
+`models/` folder once:
+
+```console
+$ skala setup
+```
+
+**5. Confirm it works:**
+
+```console
+$ skala --version
+$ skala doctor
+```
+
+`skala doctor` prints the external tools it found. The engine is required for
+everything; **ffmpeg/ffprobe are only needed for video** (install it with
+`winget install Gyan.FFmpeg` on Windows, or from
+[ffmpeg.org](https://ffmpeg.org/download.html)).
+
+That is the whole setup — continue to [Quick start](#quick-start).
 
 For development (adds pytest, ruff, mypy):
 
@@ -54,9 +111,6 @@ $ python -m pip install -e ".[dev]"
 ## Quick start
 
 ```console
-# Download the engine + its models into the Skala data directory
-$ skala setup
-
 # Upscale an image 4x (default scale) using the default photo model
 $ skala photo.png
 
@@ -79,9 +133,11 @@ $ skala
 $ skala doctor
 ```
 
-`skala run` is the default command, so `skala photo.png` and
-`skala run photo.png` are the same thing. Run `skala` with no arguments in a
-terminal and it [asks](#interactive-mode) for the file and the scale.
+Each run writes a sibling file named `<name>_skala_<scale>x.<ext>`, so
+`skala photo.png` produces `photo_skala_4x.png` next to it. `skala run` is the
+default command, so `skala photo.png` and `skala run photo.png` are the same
+thing. Run `skala` with no arguments in a terminal and it
+[asks](#interactive-mode) for the file and the scale.
 
 ## Commands
 
